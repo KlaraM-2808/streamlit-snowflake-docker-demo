@@ -66,7 +66,7 @@ ORDER BY item_count DESC;
 query = st.text_area("SQL Query", value=default_query, height=180)
 
 # --- Upgrade: Safety toggle ---
-limit_results = st.checkbox("Limit results to 200 rows (safer for demos)", value=True)
+limit_results = st.checkbox("Limit results to 200 rows", value=True)
 
 if st.button("Run query"):
     try:
