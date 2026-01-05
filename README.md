@@ -10,3 +10,4 @@ A simple Streamlit app that connects to Snowflake, runs queries, and displays re
    ```bash
    cp .env.example .env
 
+
