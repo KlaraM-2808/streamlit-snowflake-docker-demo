@@ -1,0 +1,8 @@
+services:
+  streamlit:
+    build: .
+    ports:
+      - "8502:8501"
+    env_file:
+      - .env
+
