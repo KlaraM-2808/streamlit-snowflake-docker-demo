@@ -3,9 +3,11 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 import snowflake.connector
+from snowflake.connector.errors import ProgrammingError
 
-# sets browser tab title and page layout 
+# sets browser tab title and page layout
 st.set_page_config(page_title="Snowflake Demo", layout="wide")
+
 
 # Connects once and reuse (faster + cheaper + cleaner)
 @st.cache_resource
@@ -20,17 +22,50 @@ def get_connection():
         schema=os.getenv("SNOWFLAKE_SCHEMA"),
         role=os.getenv("SNOWFLAKE_ROLE"),
     )
+
+
+def _reconnect_and_retry(sql: str) -> pd.DataFrame:
+    """
+    Clear the cached Snowflake connection, reconnect, and rerun the SQL.
+    This is used when Snowflake reports an expired session/token.
+    """
+    st.cache_resource.clear()
+    fresh_conn = get_connection()
+    return pd.read_sql(sql, fresh_conn)
+
+
 # helper function
 def run_query(conn, sql: str) -> pd.DataFrame:
     """Run SQL in Snowflake and return results as a DataFrame."""
-    return pd.read_sql(sql, conn)
+    try:
+        return pd.read_sql(sql, conn)
+
+    except ProgrammingError as e:
+        # 390114 is the Snowflake "Authentication token has expired" style error
+        if getattr(e, "errno", None) == 390114:
+            st.warning("Snowflake session expired — reconnecting…")
+            return _reconnect_and_retry(sql)
+        raise
+
 
 # helper function
 def get_context(conn) -> dict:
     """Ask Snowflake: what role/warehouse/database/schema is this session using?"""
-    sql = "SELECT CURRENT_ROLE() AS role, CURRENT_WAREHOUSE() AS warehouse, CURRENT_DATABASE() AS database, CURRENT_SCHEMA() AS schema;"
-    df = pd.read_sql(sql, conn)
-    return df.iloc[0].to_dict()
+    sql = (
+        "SELECT CURRENT_ROLE() AS role, CURRENT_WAREHOUSE() AS warehouse, "
+        "CURRENT_DATABASE() AS database, CURRENT_SCHEMA() AS schema;"
+    )
+    try:
+        df = pd.read_sql(sql, conn)
+        return df.iloc[0].to_dict()
+
+    except ProgrammingError as e:
+        if getattr(e, "errno", None) == 390114:
+            st.warning("Snowflake session expired — reconnecting…")
+            df = _reconnect_and_retry(sql)
+            return df.iloc[0].to_dict()
+        raise
+
 
 st.title("❄️ Snowflake + Streamlit Demo")
 st.write("This app connects to Snowflake, runs SQL queries, and displays results.")
@@ -42,10 +77,13 @@ with st.expander("✅ Connection status (current Snowflake session context)", ex
     try:
         ctx = get_context(conn)
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Role", ctx["ROLE"])
-        col2.metric("Warehouse", ctx["WAREHOUSE"])
-        col3.metric("Database", ctx["DATABASE"])
-        col4.metric("Schema", ctx["SCHEMA"])
+
+        # Your SQL aliases are lowercase, but Snowflake returns uppercase column names in pandas
+        col1.metric("Role", ctx.get("ROLE") or ctx.get("role"))
+        col2.metric("Warehouse", ctx.get("WAREHOUSE") or ctx.get("warehouse"))
+        col3.metric("Database", ctx.get("DATABASE") or ctx.get("database"))
+        col4.metric("Schema", ctx.get("SCHEMA") or ctx.get("schema"))
+
     except Exception as e:
         st.warning("Could not fetch Snowflake session context.")
         st.code(str(e))
@@ -53,7 +91,6 @@ with st.expander("✅ Connection status (current Snowflake session context)", ex
 st.divider()
 
 # --- Query area ---
-# how many menu items does each food truck brand have
 default_query = """
 SELECT
     truck_brand_name,
@@ -90,4 +127,5 @@ if st.button("Run query"):
     except Exception as e:
         st.error("Error running query")
         st.code(str(e))
+
 
